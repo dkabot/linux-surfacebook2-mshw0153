@@ -3,6 +3,8 @@
 #include <linux/kernel.h>
 #include <linux/moduleparam.h>
 #include <linux/platform_device.h>
+#include <linux/seq_file.h>
+#include <linux/uaccess.h>
 
 
 #define SB2_SHPS_DSM_REVISION	1
@@ -38,11 +40,13 @@ static bool sb2_dgpu_default_pwr = false;
 module_param_named(dgpu_pwr, sb2_dgpu_default_pwr, bool, SB2_PARAM_PERM);
 MODULE_PARM_DESC(dgpu_pwr, "dGPU power state (on/off)");
 
-
+extern struct proc_dir_entry *acpi_root_dir;
+static acpi_handle shps;
+static char state[4]; // I don't know how to actually check the status...
 // TODO: sysfs interface
 
 
-static int sb2_shps_dgpu_set_power(acpi_handle handle, bool on)
+static int sb2_shps_dgpu_set_power(bool on)
 {
 	union acpi_object *result;
 	union acpi_object param;
@@ -50,7 +54,7 @@ static int sb2_shps_dgpu_set_power(acpi_handle handle, bool on)
 	param.type = ACPI_TYPE_INTEGER;
 	param.integer.value = on;
 
-	result = acpi_evaluate_dsm_typed(handle, &SB2_SHPS_DSM_UUID, SB2_SHPS_DSM_REVISION,
+	result = acpi_evaluate_dsm_typed(shps, &SB2_SHPS_DSM_UUID, SB2_SHPS_DSM_REVISION,
 	                                 SB2_SHPS_DSM_GPU_STATE, &param, ACPI_TYPE_BUFFER);
 
 	if (IS_ERR_OR_NULL(result)) {
@@ -62,6 +66,7 @@ static int sb2_shps_dgpu_set_power(acpi_handle handle, bool on)
 	}
 
 	printk(KERN_INFO "SB2 SHPS: dGPU power state set to \'%d\'\n", on);
+    on ? strcpy(state, "ON") : strcpy(state, "OFF");
 
 	ACPI_FREE(result);
 	return 0;
@@ -69,16 +74,66 @@ static int sb2_shps_dgpu_set_power(acpi_handle handle, bool on)
 
 static int sb2_shps_resume(struct device *dev)
 {
-	acpi_handle shps = ACPI_HANDLE(dev);
+	acpi_handle shps_handle = ACPI_HANDLE(dev);
+    if (shps_handle != shps) {
+        shps = shps_handle;
+    }
 
-	return sb2_shps_dgpu_set_power(shps, sb2_dgpu_default_pwr);
+	return sb2_shps_dgpu_set_power(sb2_dgpu_default_pwr);
 }
+
+static ssize_t bbswitch_proc_write(struct file *fp, const char __user *buff,
+    size_t len, loff_t *off) {
+    char cmd[8];
+
+    if (len >= sizeof(cmd))
+        len = sizeof(cmd) - 1;
+
+    if (copy_from_user(cmd, buff, len))
+        return -EFAULT;
+
+    //dis_dev_get();
+
+    if (strncmp(cmd, "OFF", 3) == 0)
+        sb2_shps_dgpu_set_power(false); //bbswitch_off();
+
+    if (strncmp(cmd, "ON", 2) == 0)
+        sb2_shps_dgpu_set_power(true); //bbswitch_on();
+
+    //dis_dev_put();
+
+    return len;
+}
+
+static int bbswitch_proc_show(struct seq_file *seqfp, void *p) {
+    // show the card state. Example output: 0000:01:00:00 ON
+    /*dis_dev_get();
+    seq_printf(seqfp, "%s %s\n", dev_name(&dis_dev->dev),
+             is_card_disabled() ? "OFF" : "ON");
+    dis_dev_put();*/
+    
+    seq_printf(seqfp, "0000:02:00.0 %s\n", state);
+    return 0;
+}
+static int bbswitch_proc_open(struct inode *inode, struct file *file) {
+    return single_open(file, bbswitch_proc_show, NULL);
+}
+
+static struct file_operations bbswitch_fops = {
+    .open   = bbswitch_proc_open,
+    .read   = seq_read,
+    .write  = bbswitch_proc_write,
+    .llseek = seq_lseek,
+    .release= single_release
+};
 
 static int sb2_shps_probe(struct platform_device *pdev)
 {
+    struct proc_dir_entry *acpi_entry;
 	struct acpi_device *shps_dev = ACPI_COMPANION(&pdev->dev);
-	acpi_handle shps = ACPI_HANDLE(&pdev->dev);
 	int status = 0;
+    
+    shps = ACPI_HANDLE(&pdev->dev);
 
 	if (gpiod_count(&pdev->dev, NULL) < 0) {
 		return -ENODEV;
@@ -89,12 +144,17 @@ static int sb2_shps_probe(struct platform_device *pdev)
 		return status;
 	}
 
-	status = sb2_shps_dgpu_set_power(shps, sb2_dgpu_default_pwr);
+	status = sb2_shps_dgpu_set_power(sb2_dgpu_default_pwr);
 	if (status) {
 		acpi_dev_remove_driver_gpios(shps_dev);
 		return status;
 	}
 
+    acpi_entry = proc_create("bbswitch", 0664, acpi_root_dir, &bbswitch_fops);
+    if (acpi_entry == NULL) {
+        return -ENOMEM;
+    }
+	
 	return 0;
 }
 
@@ -102,6 +162,7 @@ static int sb2_shps_remove(struct platform_device *pdev)
 {
 	struct acpi_device *shps_dev = ACPI_COMPANION(&pdev->dev);
 
+    remove_proc_entry("bbswitch", acpi_root_dir);
 	acpi_dev_remove_driver_gpios(shps_dev);
 
 	return 0;
