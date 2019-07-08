@@ -39,14 +39,20 @@ static const struct acpi_gpio_mapping sb2_mshw0153_acpi_gpios[] = {
 
 
 enum sb2_dgpu_power {
-	SB2_DGPU_POWER_OFF = 0,
-	SB2_DGPU_POWER_ON  = 1,
+	SB2_DGPU_POWER_OFF      = 0,
+	SB2_DGPU_POWER_ON       = 1,
+
+	__SB2_DGPU_POWER__START = 0,
+	__SB2_DGPU_POWER__END   = 1,
 };
 
 enum sb2_param_dgpu_power {
-	SB2_PARAM_DGPU_POWER_OFF  = SB2_DGPU_POWER_OFF,
-	SB2_PARAM_DGPU_POWER_ON   = SB2_DGPU_POWER_ON,
-	SB2_PARAM_DGPU_POWER_ASIS = 2,
+	SB2_PARAM_DGPU_POWER_OFF      = SB2_DGPU_POWER_OFF,
+	SB2_PARAM_DGPU_POWER_ON       = SB2_DGPU_POWER_ON,
+	SB2_PARAM_DGPU_POWER_AS_IS    = 2,
+
+	__SB2_PARAM_DGPU_POWER__START = 0,
+	__SB2_PARAM_DGPU_POWER__END   = 2,
 };
 
 static const char* sb2_dgpu_power_str(enum sb2_dgpu_power power) {
@@ -102,7 +108,7 @@ static int sb2_shps_dgpu_set_power(struct platform_device *pdev, enum sb2_dgpu_p
 	struct sb2_shps_driver_data *drvdata = platform_get_drvdata(pdev);
 	int status = 0;
 
-	if (power != SB2_DGPU_POWER_ON && power != SB2_DGPU_POWER_OFF) {
+	if (power < __SB2_DGPU_POWER__START || power > __SB2_DGPU_POWER__END) {
 		return -EINVAL;
 	}
 
@@ -120,7 +126,7 @@ static int sb2_shps_dgpu_force_power(struct platform_device *pdev, enum sb2_dgpu
 	struct sb2_shps_driver_data *drvdata = platform_get_drvdata(pdev);
 	int status;
 
-	if (power != SB2_DGPU_POWER_ON && power != SB2_DGPU_POWER_OFF) {
+	if (power < __SB2_DGPU_POWER__START || power > __SB2_DGPU_POWER__END) {
 		return -EINVAL;
 	}
 
@@ -142,7 +148,7 @@ static int param_dgpu_power_set(const char *val, const struct kernel_param *kp)
 		return status;
 	}
 
-	if (power < SB2_PARAM_DGPU_POWER_ON || power > SB2_PARAM_DGPU_POWER_ASIS) {
+	if (power < __SB2_PARAM_DGPU_POWER__START || power > __SB2_PARAM_DGPU_POWER__END) {
 		return -EINVAL;
 	}
 
@@ -169,7 +175,7 @@ static ssize_t dgpu_power_show(struct device *dev, struct device_attribute *attr
 	struct platform_device *pdev = container_of(dev, struct platform_device, dev);
 	struct sb2_shps_driver_data *drvdata = platform_get_drvdata(pdev);
 
-	return sprintf(data, "%s", sb2_dgpu_power_str(drvdata->dgpu_power));
+	return sprintf(data, "%s\n", sb2_dgpu_power_str(drvdata->dgpu_power));
 }
 
 static ssize_t dgpu_power_store(struct device *dev, struct device_attribute *attr,
@@ -280,7 +286,7 @@ static int sb2_shps_probe(struct platform_device *pdev)
 	drvdata->dgpu_power = SB2_DGPU_POWER_OFF;
 	platform_set_drvdata(pdev, drvdata);
 
-	if (param_dgpu_power_init != SB2_PARAM_DGPU_POWER_ASIS) {
+	if (param_dgpu_power_init != SB2_PARAM_DGPU_POWER_AS_IS) {
 		status = sb2_shps_dgpu_force_power(pdev, param_dgpu_power_init);
 		if (status) {
 			goto err_set_power;
@@ -317,7 +323,7 @@ static int sb2_shps_remove(struct platform_device *pdev)
 	sysfs_remove_file(&pdev->dev.kobj, &dev_attr_dgpu_power.attr);
 	remove_proc_entry("bbswitch", acpi_root_dir);
 
-	if (param_dgpu_power_exit != SB2_PARAM_DGPU_POWER_ASIS) {
+	if (param_dgpu_power_exit != SB2_PARAM_DGPU_POWER_AS_IS) {
 		sb2_shps_dgpu_set_power(pdev, param_dgpu_power_exit);
 	}
 	acpi_dev_remove_driver_gpios(shps_dev);
@@ -348,7 +354,7 @@ static struct platform_driver sb2_shps_driver = {
 };
 module_platform_driver(sb2_shps_driver);
 
-MODULE_AUTHOR("Maximilian Luz");
+MODULE_AUTHOR("Maximilian Luz <luzmaximilian@gmail.com>");
 MODULE_DESCRIPTION("Surface Book 2 Hot-Plug System Driver");
 MODULE_LICENSE("GPL v2");
 
